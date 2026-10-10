@@ -21,7 +21,7 @@ import { AdminLoginPage } from "./pages/admin/AdminLoginPage.tsx";
 import { AdminDashboardLayout } from "./pages/admin/AdminDashboardLayout.tsx";
 
 function AppContent() {
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, loading: authLoading } = useAuth();
   const { publishedData } = useCMS();
   const [currentView, setCurrentView] = useState<"public" | "login" | "admin">(() => {
     const path = window.location.pathname;
@@ -75,6 +75,17 @@ function AppContent() {
 
   // Render Admin Area
   if (currentView === "admin") {
+    if (authLoading) {
+      return (
+        <div className="min-h-screen bg-[#380308] flex items-center justify-center p-4">
+          <div className="text-center text-amber-200 space-y-3">
+            <div className="w-10 h-10 border-4 border-[#F2B233] border-t-transparent rounded-full animate-spin mx-auto" />
+            <p className="text-sm font-medium">Memverifikasi Otentikasi Super Admin...</p>
+          </div>
+        </div>
+      );
+    }
+
     if (!isSuperAdmin) {
       return (
         <AdminLoginPage

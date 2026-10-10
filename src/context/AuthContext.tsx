@@ -9,6 +9,14 @@ export interface UserProfile {
   fullName?: string;
 }
 
+export interface FetchProfileResult {
+  success: boolean;
+  profile?: UserProfile;
+  errorType?: "PROFILE_NOT_FOUND" | "DATABASE_ACCESS_DENIED" | "ROLE_NOT_SUPER_ADMIN" | "UNKNOWN_ERROR";
+  errorMessage?: string;
+  roleFound?: string;
+}
+
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
@@ -65,41 +73,98 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   /**
    * Fetch User Profile from Supabase with DENY BY DEFAULT policy.
-   * If profile is not found or DB query fails, access is DENIED.
+   * Distinguishes profile missing, DB access denied (RLS), and invalid role errors.
    */
-  const fetchProfile = async (userId: string, userEmail: string): Promise<UserProfile | null> => {
+  const fetchProfile = async (
+    userId: string,
+    userEmail: string
+  ): Promise<FetchProfileResult> => {
+    const cleanEmail = userEmail.trim().toLowerCase();
+
     try {
-      const { data, error } = await supabase
+      // Step 1: Query by user UUID in public.profiles
+      let { data, error } = await supabase
         .from("profiles")
         .select("id, email, role, full_name")
         .eq("id", userId)
-        .single();
+        .maybeSingle();
 
-      if (error || !data) {
-        console.warn("Profil tidak ditemukan atau database error. Akses administratif ditolak:", error?.message);
-        setProfile(null);
-        return null;
+      // Step 2: Fallback query by verified email if not found by UUID
+      if (!data && !error && cleanEmail) {
+        const emailQuery = await supabase
+          .from("profiles")
+          .select("id, email, role, full_name")
+          .ilike("email", cleanEmail)
+          .maybeSingle();
+
+        data = emailQuery.data;
+        error = emailQuery.error;
+
+        // If found by email, sync the profile's ID with the Auth user ID
+        if (data && data.id !== userId) {
+          try {
+            await supabase
+              .from("profiles")
+              .update({ id: userId, updated_at: new Date().toISOString() })
+              .eq("email", data.email);
+          } catch (syncErr) {
+            console.warn("Gagal melakukan penyelarasan profile ID:", syncErr);
+          }
+        }
       }
 
+      // Step 3: Handle Database Access / RLS Permission Errors
+      if (error) {
+        console.error("Akses database ditolak saat membaca profiles:", error.message);
+        setProfile(null);
+        return {
+          success: false,
+          errorType: "DATABASE_ACCESS_DENIED",
+          errorMessage: `Akses database ditolak saat membaca profil (${error.message}). Periksa hak akses RLS pada tabel profiles.`,
+        };
+      }
+
+      // Step 4: Handle Profile Not Found
+      if (!data) {
+        console.warn(`Profil tidak ditemukan di database untuk email '${userEmail}' (ID: ${userId}).`);
+        setProfile(null);
+        return {
+          success: false,
+          errorType: "PROFILE_NOT_FOUND",
+          errorMessage: `Profil pengguna dengan email '${userEmail}' tidak terdaftar di tabel database public.profiles. Silakan daftarkan akun di tabel profiles terlebih dahulu.`,
+        };
+      }
+
+      // Step 5: Handle Role Check Validation
       if (data.role !== "super_admin") {
         console.warn(`User ${userEmail} memiliki role '${data.role}', bukan 'super_admin'. Akses ditolak.`);
         setProfile(null);
-        return null;
+        return {
+          success: false,
+          errorType: "ROLE_NOT_SUPER_ADMIN",
+          roleFound: data.role,
+          errorMessage: `Akses ditolak: Akun Anda terautentikasi tetapi memiliki role '${data.role}', bukan 'super_admin' di database.`,
+        };
       }
 
+      // Step 6: Success - Profile Verified as Super Admin
       const verifiedProfile: UserProfile = {
-        id: data.id,
+        id: data.id || userId,
         email: data.email || userEmail,
-        role: data.role as "super_admin",
+        role: "super_admin",
         fullName: data.full_name || "Super Admin",
       };
 
       setProfile(verifiedProfile);
-      return verifiedProfile;
-    } catch (err) {
-      console.error("Kesalahan sistem saat pengambilan profil:", err);
+      return { success: true, profile: verifiedProfile };
+    } catch (err: any) {
+      console.error("Kesalahan sistem saat verifikasi profil:", err);
       setProfile(null);
-      return null;
+      return {
+        success: false,
+        errorType: "UNKNOWN_ERROR",
+        errorMessage: `Terjadi kesalahan sistem saat memverifikasi profil: ${err?.message || "Kesalahan tidak diketahui"}`,
+      };
     } finally {
       setLoading(false);
     }
@@ -131,15 +196,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // Verify user profile role in Database
-      const verifiedProfile = await fetchProfile(data.user.id, data.user.email ?? "");
-      if (!verifiedProfile || verifiedProfile.role !== "super_admin") {
+      const profileResult = await fetchProfile(data.user.id, data.user.email ?? email);
+      
+      if (!profileResult.success || !profileResult.profile) {
         await supabase.auth.signOut();
         setProfile(null);
         setUser(null);
         setSession(null);
         return {
           success: false,
-          error: "Akses ditolak: Akun Anda terautentikasi tetapi tidak memiliki role 'super_admin' di database.",
+          error: profileResult.errorMessage || "Gagal memverifikasi profil Super Admin.",
         };
       }
 

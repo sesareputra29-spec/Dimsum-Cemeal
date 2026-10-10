@@ -94,10 +94,14 @@ DROP POLICY IF EXISTS "change_logs_admin_all" ON public.change_logs;
 -- ============================================================================
 
 -- A. Profiles
--- 1. Self SELECT (Authenticated users can read their own profile)
+-- 1. Self SELECT (Authenticated users can read their own profile by ID or verified JWT email)
 CREATE POLICY "profiles_self_select" ON public.profiles
   FOR SELECT TO authenticated
-  USING (auth.uid() = id);
+  USING (
+    auth.uid() = id 
+    OR LOWER(email) = LOWER(auth.jwt() ->> 'email')
+    OR public.is_super_admin(auth.uid())
+  );
 
 -- 2. Super Admin ALL (Super admins can perform ALL operations on profiles)
 CREATE POLICY "profiles_admin_all" ON public.profiles
