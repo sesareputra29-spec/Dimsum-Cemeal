@@ -1,0 +1,6 @@
+{
+  "name": "Dimsum Cemeal",
+  "description": "Website resmi Dimsum Cemeal Serang, Banten. Nikmati kelezatan aneka menu dimsum favorit dan pesan langsung melalui GoFood atau GrabFood.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
